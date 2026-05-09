@@ -65,6 +65,7 @@ type Shell struct {
 	specialTerminators []string
 	backSlashCmds      []string
 	quitKeywords       []string
+	isComplete         func(accumulated string) bool
 	contextValues
 	Actions
 }
@@ -80,6 +81,14 @@ type UninterpretedConfig struct {
 	BackSlashCmds []string
 	// Quit keywords to exit the shell if discovered
 	QuitKeywords []string
+	// IsComplete, when non-nil, replaces the per-line LineTerminator suffix
+	// check in readUninterpreted. It is called after each physical line is
+	// read with the cumulative buffer (lines joined by "\n", matching the
+	// final delivered string). Returning true ends accumulation. Special
+	// terminators, backslash commands, and quit keywords still apply on top
+	// of IsComplete; first-line DELIMITER detection and the leading "--"
+	// short-circuit also still apply.
+	IsComplete func(accumulated string) bool
 }
 
 // New creates a new shell with default settings. Uses standard output and default prompt ">> ".
@@ -109,6 +118,7 @@ func NewUninterpreted(conf *UninterpretedConfig) *Shell {
 	shell.specialTerminators = conf.SpecialTerminators
 	shell.backSlashCmds = conf.BackSlashCmds
 	shell.quitKeywords = conf.QuitKeywords
+	shell.isComplete = conf.IsComplete
 
 	return shell
 }
@@ -366,39 +376,72 @@ func (s *Shell) readUninterpreted() (string, error) {
 
 	if s.lineTerminator != "" {
 		firstLine := true
-		lines, err = s.readMultiLinesFunc(func(line string) (keepReading bool) {
-			if firstLine {
-				firstLine = false
-				if matches := delimiterRegex.FindStringSubmatch(line); len(matches) == 2 {
-					s.lineTerminator = matches[1]
-					return false
+		if s.isComplete != nil {
+			lines, err = s.readMultiLinesAccumFunc(func(line, accumulated string) (keepReading bool) {
+				if firstLine {
+					firstLine = false
+					if matches := delimiterRegex.FindStringSubmatch(line); len(matches) == 2 {
+						s.lineTerminator = matches[1]
+						return false
+					}
+					if strings.HasPrefix(line, "--") {
+						return false
+					}
+					for _, keyword := range s.quitKeywords {
+						if strings.TrimSpace(line) == keyword {
+							return false
+						}
+					}
 				}
-				if strings.HasPrefix(line, "--") {
-					return false
-				}
-				for _, keyword := range s.quitKeywords {
-					if strings.TrimSpace(line) == keyword {
+
+				for _, sc := range s.specialTerminators {
+					if strings.HasSuffix(strings.TrimSpace(line), sc) {
 						return false
 					}
 				}
-			}
-			
-			if strings.HasSuffix(strings.TrimSpace(line), s.lineTerminator) {
-				return false
-			}
-			for _, sc := range s.specialTerminators {
-				if strings.HasSuffix(strings.TrimSpace(line), sc) {
-					return false
+				for _, sc := range s.backSlashCmds {
+					if strings.HasPrefix(strings.TrimSpace(line), sc) {
+						return false
+					}
 				}
-			}
-			for _, sc := range s.backSlashCmds {
-				if strings.HasPrefix(strings.TrimSpace(line), sc) {
-					return false
-				}
-			}
 
-			return true
-		})
+				return !s.isComplete(accumulated)
+			})
+		} else {
+			lines, err = s.readMultiLinesFunc(func(line string) (keepReading bool) {
+				if firstLine {
+					firstLine = false
+					if matches := delimiterRegex.FindStringSubmatch(line); len(matches) == 2 {
+						s.lineTerminator = matches[1]
+						return false
+					}
+					if strings.HasPrefix(line, "--") {
+						return false
+					}
+					for _, keyword := range s.quitKeywords {
+						if strings.TrimSpace(line) == keyword {
+							return false
+						}
+					}
+				}
+
+				if strings.HasSuffix(strings.TrimSpace(line), s.lineTerminator) {
+					return false
+				}
+				for _, sc := range s.specialTerminators {
+					if strings.HasSuffix(strings.TrimSpace(line), sc) {
+						return false
+					}
+				}
+				for _, sc := range s.backSlashCmds {
+					if strings.HasPrefix(strings.TrimSpace(line), sc) {
+						return false
+					}
+				}
+
+				return true
+			})
+		}
 
 		if err != nil {
 			return "", err
@@ -504,6 +547,49 @@ func (s *Shell) readMultiLinesFunc(f func(string) (keepReading bool)) (string, e
 		// if more than one line is read
 		// revert to standard prompt.
 		s.reader.setMultiMode(false)
+	}
+	return lines.String(), err
+}
+
+// readMultiLinesAccumFunc is a sibling of readMultiLinesFunc that passes
+// both the most recent physical line and the cumulative buffer to the
+// predicate. The cumulative buffer matches what readMultiLinesFunc would
+// produce: physical lines joined by "\n" with no trailing newline on the
+// terminating line.
+func (s *Shell) readMultiLinesAccumFunc(f func(line, accumulated string) (keepReading bool)) (string, error) {
+	return readMultiLinesAccumFromReader(s.readLine, s.reader.setMultiMode, f)
+}
+
+// readMultiLinesAccumFromReader is the inner accumulation loop used by
+// readMultiLinesAccumFunc. It is parameterized on the line reader and the
+// multi-mode toggle so unit tests can drive it without a real readline
+// instance.
+func readMultiLinesAccumFromReader(
+	readLine func() (string, error),
+	setMulti func(bool),
+	f func(line, accumulated string) (keepReading bool),
+) (string, error) {
+	var lines bytes.Buffer
+	currentLine := 0
+	var err error
+	for {
+		if currentLine == 1 {
+			// from second line, enable next line prompt.
+			setMulti(true)
+		}
+		var line string
+		line, err = readLine()
+		fmt.Fprint(&lines, line)
+		if !f(line, lines.String()) || err != nil {
+			break
+		}
+		fmt.Fprintln(&lines)
+		currentLine++
+	}
+	if currentLine > 0 {
+		// if more than one line is read
+		// revert to standard prompt.
+		setMulti(false)
 	}
 	return lines.String(), err
 }
