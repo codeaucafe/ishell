@@ -37,6 +37,7 @@ type uninterpretedReader struct {
 	pending  []byte
 	rawLines []string
 	done     bool  // a special terminator ended the command
+	aborted  bool  // genuine EOF (e.g. Ctrl-D) reached before the command completed
 	err      error // a deferred read error to surface after pending drains
 }
 
@@ -66,6 +67,12 @@ func (r *uninterpretedReader) Read(p []byte) (int, error) {
 		}
 		line, err := r.nextLine()
 		if err != nil {
+			if err == io.EOF {
+				// Genuine end of input (e.g. Ctrl-D) reached while pulling a
+				// continuation line, before any delimiter or special terminator
+				// completed the command. The caller discards the partial input.
+				r.aborted = true
+			}
 			if line == "" {
 				return 0, err
 			}
