@@ -455,7 +455,7 @@ func (s *Shell) readUninterpretedCommand() (string, error) {
 	scanner.IgnoreDelimiterStatements()
 	var statements []string
 	for scanner.Scan() {
-		if t := scanner.Text(); strings.TrimSpace(t) != "" {
+		if t := strings.TrimSpace(scanner.Text()); t != "" {
 			statements = append(statements, t)
 		}
 		// The command is complete once the scanner is at a clean boundary with
