@@ -376,7 +376,7 @@ func (s *Shell) readUninterpreted() (string, error) {
 		heredoc := false
 
 		// heredoc multiline
-		lines, err = s.readMultiLinesFunc(func(line, _ string) (keepReading bool) {
+		lines, err = s.readMultiLinesFunc(func(line string) (keepReading bool) {
 			if !heredoc {
 				if strings.Contains(line, "<<") {
 					s := strings.SplitN(line, "<<", 2)
@@ -485,7 +485,7 @@ func (s *Shell) read() ([]string, error) {
 	heredoc := false
 
 	// heredoc multiline
-	lines, err := s.readMultiLinesFunc(func(line, _ string) (keepReading bool) {
+	lines, err := s.readMultiLinesFunc(func(line string) (keepReading bool) {
 		if !heredoc {
 			if strings.Contains(line, "<<") {
 				s := strings.SplitN(line, "<<", 2)
@@ -524,11 +524,7 @@ func (s *Shell) read() ([]string, error) {
 	return args, err
 }
 
-// readMultiLinesFunc accumulates physical lines until the predicate returns
-// false. The predicate receives the latest line and the cumulative buffer
-// (lines joined by "\n"); callers that only need the line can ignore the
-// second argument.
-func (s *Shell) readMultiLinesFunc(f func(line, accumulated string) (keepReading bool)) (string, error) {
+func (s *Shell) readMultiLinesFunc(f func(string) (keepReading bool)) (string, error) {
 	var lines bytes.Buffer
 	currentLine := 0
 	var err error
@@ -540,7 +536,7 @@ func (s *Shell) readMultiLinesFunc(f func(line, accumulated string) (keepReading
 		var line string
 		line, err = s.readLine()
 		fmt.Fprint(&lines, line)
-		if !f(line, lines.String()) || err != nil {
+		if !f(line) || err != nil {
 			break
 		}
 		fmt.Fprintln(&lines)

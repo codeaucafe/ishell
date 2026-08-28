@@ -103,9 +103,7 @@ func (s *shellActionsImpl) ReadPasswordErr() (string, error) {
 }
 
 func (s *shellActionsImpl) ReadMultiLinesFunc(f func(string) (keepReading bool)) string {
-	lines, _ := s.readMultiLinesFunc(func(line, _ string) (keepReading bool) {
-		return f(line)
-	})
+	lines, _ := s.readMultiLinesFunc(f)
 	return lines
 }
 
